@@ -291,12 +291,15 @@ export default function App() {
       { header: "SCREENSHOT", key: "screenshot", width: 24 },
     ];
 
+    sheet.getRow(1).height = 28;
     sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
     sheet.getRow(1).fill = {
       type: "pattern",
       pattern: "solid",
       fgColor: { argb: "FF111827" },
     };
+
+    sheet.getColumn(4).width = 24;
 
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
@@ -308,12 +311,30 @@ export default function App() {
         timecode: r.timecode,
         subtitle: r.subtitle,
         comment: r.comment,
+        screenshot: "",
       });
 
       sheet.getRow(rowNumber).height = 120;
-      sheet.getCell(`A${rowNumber}`).alignment = { vertical: "middle", wrapText: true };
-      sheet.getCell(`B${rowNumber}`).alignment = { vertical: "middle", wrapText: true };
-      sheet.getCell(`C${rowNumber}`).alignment = { vertical: "middle", wrapText: true };
+
+      sheet.getCell(`A${rowNumber}`).alignment = {
+        vertical: "middle",
+        wrapText: true,
+      };
+
+      sheet.getCell(`B${rowNumber}`).alignment = {
+        vertical: "middle",
+        wrapText: true,
+      };
+
+      sheet.getCell(`C${rowNumber}`).alignment = {
+        vertical: "middle",
+        wrapText: true,
+      };
+
+      sheet.getCell(`D${rowNumber}`).alignment = {
+        vertical: "middle",
+        horizontal: "center",
+      };
 
       if (r.screenshot) {
         const imageId = workbook.addImage({
@@ -322,8 +343,15 @@ export default function App() {
         });
 
         sheet.addImage(imageId, {
-          tl: { col: 3, row: rowNumber - 1 },
-          ext: { width: 80, height: 140 },
+          tl: {
+            col: 3.08,
+            row: rowNumber - 0.92,
+          },
+          br: {
+            col: 3.92,
+            row: rowNumber - 0.08,
+          },
+          editAs: "oneCell",
         });
       }
 
