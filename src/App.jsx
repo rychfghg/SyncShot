@@ -3,6 +3,10 @@ import ExcelJS from "exceljs";
 import { saveAs } from "file-saver";
 import "./App.css";
 
+const CAPTURE_WIDTH = 540;
+const CAPTURE_HEIGHT = 960;
+const IMAGE_QUALITY = 0.76;
+
 function timeToSeconds(t) {
   const [h, m, rest] = t.replace(",", ".").split(":");
   return Number(h) * 3600 + Number(m) * 60 + Number(rest);
@@ -17,27 +21,48 @@ function formatVideoTime(seconds = 0) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-function drawCover(ctx, video, x, y, w, h) {
+function sleep(ms = 0) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function canvasToJpeg(canvas, quality = IMAGE_QUALITY) {
+  return new Promise((resolve) => {
+    canvas.toBlob(
+      (blob) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      },
+      "image/jpeg",
+      quality
+    );
+  });
+}
+
+function drawContain(ctx, video, x, y, w, h) {
   const videoRatio = video.videoWidth / video.videoHeight;
   const areaRatio = w / h;
 
-  let sx = 0;
-  let sy = 0;
-  let sw = video.videoWidth;
-  let sh = video.videoHeight;
+  let drawW = w;
+  let drawH = h;
 
   if (videoRatio > areaRatio) {
-    sw = video.videoHeight * areaRatio;
-    sx = (video.videoWidth - sw) / 2;
+    drawW = w;
+    drawH = w / videoRatio;
   } else {
-    sh = video.videoWidth / areaRatio;
-    sy = (video.videoHeight - sh) / 2;
+    drawH = h;
+    drawW = h * videoRatio;
   }
 
-  ctx.drawImage(video, sx, sy, sw, sh, x, y, w, h);
+  const drawX = x + (w - drawW) / 2;
+  const drawY = y + (h - drawH) / 2;
+
+  ctx.drawImage(video, drawX, drawY, drawW, drawH);
 }
 
 function parseSRT(srt) {
+  if (!srt.trim()) return [];
+
   return srt
     .trim()
     .split(/\n\s*\n/)
@@ -54,8 +79,6 @@ function parseSRT(srt) {
       return {
         id: index + 1,
         timecode: `${start} → ${end}`,
-        start,
-        end,
         startSeconds,
         endSeconds,
         middleSeconds,
@@ -87,6 +110,8 @@ export default function App() {
   const [srtText, setSrtText] = useState("");
   const [rows, setRows] = useState([]);
   const [capturing, setCapturing] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [progress, setProgress] = useState("");
 
   function loadVideo(e) {
     const file = e.target.files[0];
@@ -108,87 +133,98 @@ export default function App() {
     await waitForSeek(video, row.middleSeconds);
 
     const canvas = document.createElement("canvas");
-    canvas.width = 1080;
-    canvas.height = 1920;
+    canvas.width = CAPTURE_WIDTH;
+    canvas.height = CAPTURE_HEIGHT;
 
     const ctx = canvas.getContext("2d");
 
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const videoX = 0;
-    const videoY = 120;
-    const videoW = canvas.width;
-    const videoH = 1180;
-
-    drawCover(ctx, video, videoX, videoY, videoW, videoH);
-
-    const panelY = 1300;
+    const topBarH = 34;
+    const playerH = 170;
+    const videoAreaY = topBarH;
+    const videoAreaH = CAPTURE_HEIGHT - topBarH - playerH;
 
     ctx.fillStyle = "#111";
-    ctx.fillRect(0, panelY, canvas.width, canvas.height - panelY);
+    ctx.fillRect(0, 0, CAPTURE_WIDTH, topBarH);
+
+    ctx.fillStyle = "#fff";
+    ctx.font = "13px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText("‹", 18, 22);
+
+    ctx.font = "12px Arial";
+    ctx.fillText("Media Player", 58, 22);
+
+    drawContain(ctx, video, 0, videoAreaY, CAPTURE_WIDTH, videoAreaH);
+
+    const panelY = CAPTURE_HEIGHT - playerH;
+
+    ctx.fillStyle = "#111";
+    ctx.fillRect(0, panelY, CAPTURE_WIDTH, playerH);
 
     const current = row.middleSeconds;
     const duration = video.duration || row.endSeconds || 1;
     const percent = Math.min(current / duration, 1);
 
-    const progressX = 130;
-    const progressY = 1450;
-    const progressW = 820;
-    const progressH = 8;
-
-    ctx.fillStyle = "#8b8b8b";
-    ctx.fillRect(progressX, progressY, progressW, progressH);
-
-    ctx.fillStyle = "#ff7a2f";
-    ctx.fillRect(progressX, progressY, progressW * percent, progressH);
-
-    ctx.beginPath();
-    ctx.arc(progressX + progressW * percent, progressY + 4, 22, 0, Math.PI * 2);
-    ctx.fillStyle = "#555";
-    ctx.fill();
-
-    ctx.beginPath();
-    ctx.arc(progressX + progressW * percent, progressY + 4, 11, 0, Math.PI * 2);
-    ctx.fillStyle = "#ff7a2f";
-    ctx.fill();
-
     ctx.fillStyle = "#fff";
-    ctx.font = "32px Arial";
+    ctx.font = "14px Arial";
     ctx.textAlign = "left";
-    ctx.fillText(formatVideoTime(current), 40, 1463);
+    ctx.fillText(formatVideoTime(current), 18, panelY + 30);
 
     ctx.textAlign = "right";
-    ctx.fillText(formatVideoTime(duration), 1040, 1463);
+    ctx.fillText(formatVideoTime(duration), CAPTURE_WIDTH - 18, panelY + 30);
 
-    ctx.textAlign = "left";
-    ctx.font = "700 44px Arial";
+    const progressX = 78;
+    const progressY = panelY + 22;
+    const progressW = CAPTURE_WIDTH - 156;
 
-    const cleanName = videoName || "Video";
-    const shortName = cleanName.length > 34 ? cleanName.slice(0, 34) + "..." : cleanName;
+    ctx.fillStyle = "#9ca3af";
+    ctx.fillRect(progressX, progressY, progressW, 4);
 
-    ctx.fillText(shortName, 40, 1580);
+    ctx.fillStyle = "#fb923c";
+    ctx.fillRect(progressX, progressY, progressW * percent, 4);
 
     ctx.beginPath();
-    ctx.arc(540, 1700, 50, 0, Math.PI * 2);
-    ctx.strokeStyle = "#ff7a2f";
-    ctx.lineWidth = 7;
+    ctx.arc(progressX + progressW * percent, progressY + 2, 11, 0, Math.PI * 2);
+    ctx.fillStyle = "#5a5a5a";
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(progressX + progressW * percent, progressY + 2, 6, 0, Math.PI * 2);
+    ctx.fillStyle = "#fb923c";
+    ctx.fill();
+
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#f8fafc";
+    ctx.font = "700 20px Arial";
+
+    const shortName =
+      videoName.length > 24 ? videoName.slice(0, 24) + "..." : videoName || "Video";
+
+    ctx.fillText(shortName, 18, panelY + 82);
+
+    ctx.beginPath();
+    ctx.arc(CAPTURE_WIDTH / 2, panelY + 82, 22, 0, Math.PI * 2);
+    ctx.strokeStyle = "#fb923c";
+    ctx.lineWidth = 3;
     ctx.stroke();
 
     ctx.beginPath();
-    ctx.moveTo(525, 1670);
-    ctx.lineTo(525, 1730);
-    ctx.lineTo(575, 1700);
+    ctx.moveTo(CAPTURE_WIDTH / 2 - 6, panelY + 69);
+    ctx.lineTo(CAPTURE_WIDTH / 2 - 6, panelY + 95);
+    ctx.lineTo(CAPTURE_WIDTH / 2 + 14, panelY + 82);
     ctx.closePath();
     ctx.fillStyle = "#fff";
     ctx.fill();
 
-    ctx.font = "700 34px Arial";
+    ctx.font = "700 13px Arial";
     ctx.textAlign = "center";
     ctx.fillStyle = "#e5e7eb";
-    ctx.fillText(row.timecode, canvas.width / 2, 1840);
+    ctx.fillText(row.timecode, CAPTURE_WIDTH / 2, panelY + 138);
 
-    const image = canvas.toDataURL("image/png");
+    const image = await canvasToJpeg(canvas);
 
     if (shouldUpdateState) {
       setRows((prev) =>
@@ -200,16 +236,27 @@ export default function App() {
   }
 
   async function captureAll() {
+    if (!rows.length || capturing) return;
+
     setCapturing(true);
+    setProgress("Preparing screenshots...");
 
-    const updatedRows = [];
+    const updatedRows = [...rows];
 
-    for (const row of rows) {
-      const screenshot = await captureScreenshot(row, false);
-      updatedRows.push({ ...row, screenshot });
+    for (let i = 0; i < updatedRows.length; i++) {
+      setProgress(`Capturing ${i + 1} of ${updatedRows.length}...`);
+
+      const screenshot = await captureScreenshot(updatedRows[i], false);
+      updatedRows[i] = { ...updatedRows[i], screenshot };
+
+      if (i % 10 === 0) {
+        setRows([...updatedRows]);
+        await sleep(50);
+      }
     }
 
     setRows(updatedRows);
+    setProgress("Finished capturing.");
     setCapturing(false);
   }
 
@@ -219,16 +266,21 @@ export default function App() {
     );
   }
 
-  function downloadPNG(row) {
+  function downloadJPG(row) {
     if (!row.screenshot) return;
 
     const a = document.createElement("a");
     a.href = row.screenshot;
-    a.download = `screenshot_${row.id}.png`;
+    a.download = `screenshot_${row.id}.jpg`;
     a.click();
   }
 
   async function exportSheet() {
+    if (!rows.length || exporting) return;
+
+    setExporting(true);
+    setProgress("Building Excel file...");
+
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet("SRT Screenshots");
 
@@ -236,7 +288,7 @@ export default function App() {
       { header: "TIMECODE", key: "timecode", width: 32 },
       { header: "SUBTITLE", key: "subtitle", width: 50 },
       { header: "COMMENT", key: "comment", width: 40 },
-      { header: "SCREENSHOT", key: "screenshot", width: 32 },
+      { header: "SCREENSHOT", key: "screenshot", width: 24 },
     ];
 
     sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
@@ -246,8 +298,11 @@ export default function App() {
       fgColor: { argb: "FF111827" },
     };
 
-    rows.forEach((r, index) => {
-      const rowNumber = index + 2;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const rowNumber = i + 2;
+
+      setProgress(`Adding Excel row ${i + 1} of ${rows.length}...`);
 
       sheet.addRow({
         timecode: r.timecode,
@@ -255,25 +310,27 @@ export default function App() {
         comment: r.comment,
       });
 
-      sheet.getRow(rowNumber).height = 190;
+      sheet.getRow(rowNumber).height = 120;
       sheet.getCell(`A${rowNumber}`).alignment = { vertical: "middle", wrapText: true };
       sheet.getCell(`B${rowNumber}`).alignment = { vertical: "middle", wrapText: true };
       sheet.getCell(`C${rowNumber}`).alignment = { vertical: "middle", wrapText: true };
 
       if (r.screenshot) {
-        const base64 = r.screenshot.split(",")[1];
-
         const imageId = workbook.addImage({
-          base64,
-          extension: "png",
+          base64: r.screenshot.split(",")[1],
+          extension: "jpeg",
         });
 
         sheet.addImage(imageId, {
           tl: { col: 3, row: rowNumber - 1 },
-          ext: { width: 120, height: 210 },
+          ext: { width: 80, height: 140 },
         });
       }
-    });
+
+      if (i % 20 === 0) await sleep(30);
+    }
+
+    setProgress("Saving Excel file...");
 
     const buffer = await workbook.xlsx.writeBuffer();
 
@@ -283,95 +340,159 @@ export default function App() {
       }),
       "srt-video-screenshots.xlsx"
     );
+
+    setProgress("Excel downloaded.");
+    setExporting(false);
   }
 
   return (
     <div className="app">
-      <header className="hero">
-        <h1>SRT Video Screenshot Tool</h1>
-        <p>Capture full-screen portrait screenshots with real video timecode.</p>
+      <header className="siteHeader">
+        <div className="headerText">
+          <div className="pill">Video Subtitle Capture</div>
+          <h1>SRT Screenshot Studio</h1>
+          <p>
+            Create clean media-player screenshots from subtitle timestamps, add notes,
+            and export everything into a lightweight Excel file.
+          </p>
+        </div>
+
+        <div className="headerStats">
+          <strong>{rows.length}</strong>
+          <span>Synced rows</span>
+        </div>
       </header>
 
-      <div className="panel">
-        <label>Upload Video</label>
-        <input type="file" accept="video/*" onChange={loadVideo} />
-
-        {videoURL && (
-          <div className="videoWrap">
-            <video ref={videoRef} src={videoURL} controls className="video" />
+      <main className="dashboard">
+        <section className="card videoCard">
+          <div className="cardHeader">
+            <div>
+              <h2>Upload Video</h2>
+              <p>Select the source video used for frame captures.</p>
+            </div>
           </div>
-        )}
-      </div>
 
-      <div className="panel">
-        <label>Paste SRT Here</label>
+          <label className="fileUpload">
+            <input type="file" accept="video/*" onChange={loadVideo} />
+            <span>{videoName || "Choose video file"}</span>
+          </label>
 
-        <textarea
-          value={srtText}
-          onChange={(e) => setSrtText(e.target.value)}
-          placeholder="Paste your SRT subtitle here..."
-        />
+          {videoURL ? (
+            <div className="videoWrap">
+              <video ref={videoRef} src={videoURL} controls className="video" />
+            </div>
+          ) : (
+            <div className="emptyVideo">
+              <div>🎬</div>
+              <p>Video preview will appear here</p>
+            </div>
+          )}
+        </section>
 
-        <div className="buttons">
-          <button onClick={syncSRT}>Sync SRT</button>
+        <section className="card inputCard">
+          <div className="cardHeader">
+            <div>
+              <h2>Paste SRT</h2>
+              <p>Paste your subtitle content, then sync the rows.</p>
+            </div>
+          </div>
 
-          <button onClick={captureAll} disabled={capturing || !rows.length}>
-            {capturing ? "Capturing..." : "Auto Screenshot All"}
-          </button>
+          <textarea
+            value={srtText}
+            onChange={(e) => setSrtText(e.target.value)}
+            placeholder="Paste your SRT subtitle here..."
+          />
 
-          <button onClick={exportSheet} disabled={!rows.length}>
-            Download Excel
-          </button>
+          <div className="buttons">
+            <button onClick={syncSRT} disabled={capturing || exporting}>
+              Sync SRT
+            </button>
+
+            <button
+              className="secondary"
+              onClick={captureAll}
+              disabled={capturing || exporting || !rows.length}
+            >
+              {capturing ? "Capturing..." : "Auto Screenshot All"}
+            </button>
+
+            <button onClick={exportSheet} disabled={capturing || exporting || !rows.length}>
+              {exporting ? "Exporting..." : "Download Excel"}
+            </button>
+          </div>
+
+          {progress && <div className="progressText">{progress}</div>}
+        </section>
+      </main>
+
+      <section className="tableSection">
+        <div className="tableHeader">
+          <div>
+            <h2>Captured Frames</h2>
+            <p>Review subtitles, write comments, capture frames, and download images.</p>
+          </div>
+          <span>{rows.length} rows</span>
         </div>
-      </div>
 
-      <div className="tableWrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Timecode</th>
-              <th>Subtitle</th>
-              <th>Comment</th>
-              <th>Screenshot</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.id}>
-                <td className="timecode">{row.timecode}</td>
-
-                <td>{row.subtitle}</td>
-
-                <td>
-                  <textarea
-                    className="comment"
-                    value={row.comment}
-                    onChange={(e) => updateComment(row.id, e.target.value)}
-                    placeholder="Write comment..."
-                  />
-                </td>
-
-                <td>
-                  <button className="small" onClick={() => captureScreenshot(row)}>
-                    Screenshot
-                  </button>
-
-                  {row.screenshot && (
-                    <>
-                      <img src={row.screenshot} alt="Captured screenshot" />
-
-                      <button className="small ghost" onClick={() => downloadPNG(row)}>
-                        Download PNG
-                      </button>
-                    </>
-                  )}
-                </td>
+        <div className="tableWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Timecode</th>
+                <th>Subtitle</th>
+                <th>Comment</th>
+                <th>Screenshot</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+
+            <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan="4" className="emptyTable">
+                    No synced subtitles yet. Paste your SRT and click Sync SRT.
+                  </td>
+                </tr>
+              ) : (
+                rows.map((row) => (
+                  <tr key={row.id}>
+                    <td className="timecode">{row.timecode}</td>
+                    <td className="subtitleCell">{row.subtitle}</td>
+
+                    <td>
+                      <textarea
+                        className="comment"
+                        value={row.comment}
+                        onChange={(e) => updateComment(row.id, e.target.value)}
+                        placeholder="Write comment..."
+                      />
+                    </td>
+
+                    <td>
+                      <button
+                        className="small"
+                        onClick={() => captureScreenshot(row)}
+                        disabled={capturing || exporting}
+                      >
+                        Screenshot
+                      </button>
+
+                      {row.screenshot && (
+                        <>
+                          <img src={row.screenshot} alt="Captured screenshot" loading="lazy" />
+
+                          <button className="small ghost" onClick={() => downloadJPG(row)}>
+                            Download JPG
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
